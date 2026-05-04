@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="عدّاد الباب" />
+  <link rel="manifest" href="manifest.json" />
+  <link rel="apple-touch-icon" href="icon-192.png" />
+  <title>عدّاد الداخلين</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>عدّاد الداخلين</h1>
+    </div>
+    <div class="status" id="status">جاري التحميل...</div>
+  </header>
+
+  <main class="stage">
+    <section class="counters">
+      <div class="counter-card in">
+        <span class="label">دخول</span>
+        <span class="value" id="countIn">0</span>
+      </div>
+      <div class="counter-card out">
+        <span class="label">خروج</span>
+        <span class="value" id="countOut">0</span>
+      </div>
+      <div class="counter-card net">
+        <span class="label">داخل الآن</span>
+        <span class="value" id="countNet">0</span>
+      </div>
+    </section>
+
+    <section class="camera-wrap">
+      <video id="video" playsinline muted autoplay></video>
+      <canvas id="overlay"></canvas>
+      <div class="cam-info">
+        <span id="fps">— FPS</span>
+        <span id="people">0 شخص</span>
+      </div>
+      <div class="empty-state" id="emptyState">
+        <p>اضغط <strong>تشغيل</strong> لبدء الكاميرا</p>
+      </div>
+    </section>
+
+    <section class="controls">
+      <button id="btnStart" class="btn primary">تشغيل</button>
+      <button id="btnStop" class="btn" disabled>إيقاف</button>
+      <button id="btnReset" class="btn">صفّر</button>
+      <button id="btnExport" class="btn">تصدير CSV</button>
+      <button id="btnSettings" class="btn icon" aria-label="إعدادات">⚙</button>
+    </section>
+
+    <details class="settings" id="settingsPanel">
+      <summary>إعدادات الكشف</summary>
+      <div class="setting-row">
+        <label>اتجاه الخط</label>
+        <select id="lineOrient">
+          <option value="horizontal">أفقي</option>
+          <option value="vertical">عمودي</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>موضع الخط</label>
+        <input id="linePos" type="range" min="10" max="90" value="50" />
+        <span id="linePosVal">50%</span>
+      </div>
+      <div class="setting-row">
+        <label>اتجاه الدخول</label>
+        <select id="entryDir">
+          <option value="positive">من الأعلى/اليسار → دخول</option>
+          <option value="negative">من الأسفل/اليمين → دخول</option>
+        </select>
+      </div>
+      <div class="setting-row">
+        <label>حد الثقة</label>
+        <input id="confThreshold" type="range" min="30" max="90" value="55" />
+        <span id="confVal">55%</span>
+      </div>
+      <div class="setting-row">
+        <label>الكاميرا</label>
+        <select id="cameraFacing">
+          <option value="environment">الخلفية</option>
+          <option value="user">الأمامية</option>
+        </select>
+      </div>
+    </details>
+
+    <section class="history">
+      <h2>سجل اليوم</h2>
+      <ul id="historyList"></ul>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
