@@ -1,21 +1,37 @@
 (() => {
   'use strict';
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Element refs
+  // ─────────────────────────────────────────────────────────────────────────────
   const $ = (id) => document.getElementById(id);
   const els = {
+    body: document.body,
     video: $('video'),
     overlay: $('overlay'),
+    cameraWrap: $('cameraWrap'),
+    lineHandle: $('lineHandle'),
     status: $('status'),
+    modeBadge: $('modeBadge'),
     countIn: $('countIn'),
     countOut: $('countOut'),
     countNet: $('countNet'),
+    netCard: $('netCard'),
+    capacityHint: $('capacityHint'),
+    capacityBar: $('capacityBar'),
+    capacityFill: $('capacityFill'),
+    capacityText: $('capacityText'),
+    capacityFlash: $('capacityFlash'),
     fps: $('fps'),
     people: $('people'),
+    dragHint: $('dragHint'),
     empty: $('emptyState'),
     btnStart: $('btnStart'),
     btnStop: $('btnStop'),
     btnReset: $('btnReset'),
     btnExport: $('btnExport'),
+    btnPDF: $('btnPDF'),
+    btnShare: $('btnShare'),
     btnSettings: $('btnSettings'),
     settings: $('settingsPanel'),
     lineOrient: $('lineOrient'),
@@ -25,11 +41,40 @@
     confThreshold: $('confThreshold'),
     confVal: $('confVal'),
     cameraFacing: $('cameraFacing'),
+    capacityMax: $('capacityMax'),
+    hapticOn: $('hapticOn'),
+    soundOn: $('soundOn'),
     historyList: $('historyList'),
+    chartSvg: $('hourlyChart'),
+    chartEmpty: $('chartEmpty'),
+    chartSub: $('chartSub'),
+    shareModal: $('shareModal'),
+    shareClose: $('shareClose'),
+    shareStatus: $('shareStatus'),
+    tabHost: $('tabHost'),
+    tabJoin: $('tabJoin'),
+    paneHost: $('paneHost'),
+    paneJoin: $('paneJoin'),
+    btnHostStart: $('btnHostStart'),
+    btnHostStop: $('btnHostStop'),
+    shareResult: $('shareResult'),
+    shareCode: $('shareCode'),
+    shareQR: $('shareQR'),
+    shareLink: $('shareLink'),
+    btnCopyLink: $('btnCopyLink'),
+    joinCode: $('joinCode'),
+    btnJoin: $('btnJoin'),
+    alertModal: $('alertModal'),
+    alertTitle: $('alertTitle'),
+    alertText: $('alertText'),
+    alertClose: $('alertClose'),
   };
 
-  const STORE_KEY = 'door-counter-state-v1';
-  const HISTORY_KEY = 'door-counter-history-v1';
+  // ─────────────────────────────────────────────────────────────────────────────
+  // State
+  // ─────────────────────────────────────────────────────────────────────────────
+  const STORE_KEY = 'door-counter-state-v2';
+  const HISTORY_KEY = 'door-counter-history-v2';
 
   const state = {
     model: null,
@@ -39,6 +84,7 @@
     inferring: false,
     countIn: 0,
     countOut: 0,
+    capacityAlerted: false,
     tracks: [],
     nextTrackId: 1,
     lastDetectionAt: 0,
@@ -51,14 +97,17 @@
       entryDir: 'positive',
       confThreshold: 0.55,
       cameraFacing: 'environment',
+      capacityMax: 0,
+      hapticOn: true,
+      soundOn: false,
     },
+    mode: 'host',
+    audioCtx: null,
   };
 
-  function setStatus(text, kind = '') {
-    els.status.textContent = text;
-    els.status.className = 'status' + (kind ? ' ' + kind : '');
-  }
-
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Storage
+  // ─────────────────────────────────────────────────────────────────────────────
   function loadState() {
     try {
       const s = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
@@ -86,6 +135,14 @@
     localStorage.setItem(HISTORY_KEY, JSON.stringify(state.history));
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // UI helpers
+  // ─────────────────────────────────────────────────────────────────────────────
+  function setStatus(text, kind = '') {
+    els.status.textContent = text;
+    els.status.className = 'status' + (kind ? ' ' + kind : '');
+  }
+
   function syncUIFromSettings() {
     els.lineOrient.value = state.settings.lineOrient;
     els.linePos.value = String(state.settings.linePos);
@@ -94,14 +151,59 @@
     els.confThreshold.value = String(Math.round(state.settings.confThreshold * 100));
     els.confVal.textContent = Math.round(state.settings.confThreshold * 100) + '%';
     els.cameraFacing.value = state.settings.cameraFacing;
+    els.capacityMax.value = String(state.settings.capacityMax || 0);
+    els.hapticOn.checked = !!state.settings.hapticOn;
+    els.soundOn.checked = !!state.settings.soundOn;
     updateCounters();
+    updateCapacityUI();
     renderHistory();
+    renderChart();
+    positionLineHandle();
   }
 
   function updateCounters() {
-    els.countIn.textContent = state.countIn;
-    els.countOut.textContent = state.countOut;
-    els.countNet.textContent = Math.max(0, state.countIn - state.countOut);
+    const net = Math.max(0, state.countIn - state.countOut);
+    setNumberAnim(els.countIn, state.countIn);
+    setNumberAnim(els.countOut, state.countOut);
+    setNumberAnim(els.countNet, net);
+  }
+
+  function setNumberAnim(el, value) {
+    const prev = +el.textContent;
+    el.textContent = value;
+    if (prev !== value) {
+      el.classList.remove('bump');
+      void el.offsetWidth;
+      el.classList.add('bump');
+    }
+  }
+
+  function updateCapacityUI() {
+    const cap = state.settings.capacityMax || 0;
+    const net = Math.max(0, state.countIn - state.countOut);
+
+    if (cap <= 0) {
+      els.capacityBar.hidden = true;
+      els.capacityHint.textContent = '';
+      els.netCard.classList.remove('warn', 'full');
+      return;
+    }
+
+    els.capacityBar.hidden = false;
+    const pct = Math.min(100, (net / cap) * 100);
+    els.capacityFill.style.inset = `0 ${100 - pct}% 0 0`;
+    els.capacityText.textContent = `${net} / ${cap}`;
+    els.capacityHint.textContent = `${net} / ${cap}`;
+
+    els.netCard.classList.remove('warn', 'full');
+    els.capacityFill.classList.remove('warn', 'full');
+    if (net >= cap) {
+      els.netCard.classList.add('full');
+      els.capacityFill.classList.add('full');
+    } else if (net >= cap * 0.85) {
+      els.netCard.classList.add('warn');
+      els.capacityFill.classList.add('warn');
+    }
   }
 
   function renderHistory() {
@@ -118,13 +220,154 @@
     `).join('');
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Hourly chart (SVG bars)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function renderChart() {
+    const svg = els.chartSvg;
+    const W = 480, H = 160, P = { top: 14, right: 8, bottom: 24, left: 8 };
+    svg.innerHTML = '';
+
+    const buckets = new Array(24).fill(0).map(() => ({ in: 0, out: 0 }));
+    for (const e of state.history) {
+      const h = new Date(e.t).getHours();
+      buckets[h][e.type] = (buckets[h][e.type] || 0) + 1;
+    }
+
+    const maxVal = Math.max(1, ...buckets.map(b => Math.max(b.in, b.out)));
+    const chartW = W - P.left - P.right;
+    const chartH = H - P.top - P.bottom;
+    const slot = chartW / 24;
+    const barW = Math.max(2, slot * 0.35);
+    const gap = (slot - barW * 2) / 3;
+
+    const total = state.history.length;
+    els.chartEmpty.classList.toggle('hidden', total > 0);
+    els.chartSub.textContent = total > 0 ? `${total} حدث اليوم` : 'اليوم';
+
+    if (total === 0) return;
+
+    const ns = 'http://www.w3.org/2000/svg';
+    for (let i = 0; i < 4; i++) {
+      const y = P.top + (chartH * i / 4);
+      const line = document.createElementNS(ns, 'line');
+      line.setAttribute('x1', P.left);
+      line.setAttribute('x2', W - P.right);
+      line.setAttribute('y1', y);
+      line.setAttribute('y2', y);
+      line.setAttribute('stroke', '#334155');
+      line.setAttribute('stroke-dasharray', '2 3');
+      line.setAttribute('stroke-width', '1');
+      svg.appendChild(line);
+    }
+
+    for (let h = 0; h < 24; h++) {
+      const x = P.left + slot * h;
+      const b = buckets[h];
+
+      if (b.in > 0) {
+        const barH = (b.in / maxVal) * chartH;
+        const r = document.createElementNS(ns, 'rect');
+        r.setAttribute('x', x + gap);
+        r.setAttribute('y', P.top + chartH - barH);
+        r.setAttribute('width', barW);
+        r.setAttribute('height', barH);
+        r.setAttribute('rx', 2);
+        r.setAttribute('fill', '#10b981');
+        svg.appendChild(r);
+      }
+
+      if (b.out > 0) {
+        const barH = (b.out / maxVal) * chartH;
+        const r = document.createElementNS(ns, 'rect');
+        r.setAttribute('x', x + gap * 2 + barW);
+        r.setAttribute('y', P.top + chartH - barH);
+        r.setAttribute('width', barW);
+        r.setAttribute('height', barH);
+        r.setAttribute('rx', 2);
+        r.setAttribute('fill', '#ef4444');
+        svg.appendChild(r);
+      }
+
+      if (h % 3 === 0) {
+        const t = document.createElementNS(ns, 'text');
+        t.setAttribute('x', x + slot / 2);
+        t.setAttribute('y', H - 8);
+        t.setAttribute('fill', '#94a3b8');
+        t.setAttribute('font-size', '10');
+        t.setAttribute('text-anchor', 'middle');
+        t.textContent = h.toString().padStart(2, '0');
+        svg.appendChild(t);
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Events / counting / haptic / sound
+  // ─────────────────────────────────────────────────────────────────────────────
   function logEvent(type) {
     state.history.push({ t: Date.now(), type });
     if (state.history.length > 1000) state.history.shift();
     renderHistory();
+    renderChart();
     saveState();
   }
 
+  function feedback(type) {
+    if (state.settings.hapticOn && navigator.vibrate) {
+      navigator.vibrate(type === 'in' ? 40 : [30, 40, 30]);
+    }
+    if (state.settings.soundOn) beep(type === 'in' ? 880 : 440, 80);
+  }
+
+  function beep(freq, dur) {
+    try {
+      if (!state.audioCtx) state.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const ctx = state.audioCtx;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain).connect(ctx.destination);
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.12, ctx.currentTime + 0.01);
+      gain.gain.linearRampToValueAtTime(0, ctx.currentTime + dur / 1000);
+      osc.start();
+      osc.stop(ctx.currentTime + dur / 1000 + 0.02);
+    } catch {}
+  }
+
+  function checkCapacity() {
+    const cap = state.settings.capacityMax || 0;
+    if (cap <= 0) { state.capacityAlerted = false; return; }
+    const net = Math.max(0, state.countIn - state.countOut);
+    if (net >= cap && !state.capacityAlerted) {
+      state.capacityAlerted = true;
+      triggerCapacityAlert(net, cap);
+    }
+    if (net < cap) state.capacityAlerted = false;
+  }
+
+  function triggerCapacityAlert(net, cap) {
+    if (navigator.vibrate) navigator.vibrate([100, 60, 100, 60, 200]);
+    if (state.settings.soundOn) {
+      beep(880, 150);
+      setTimeout(() => beep(660, 200), 180);
+    }
+    els.capacityFlash.classList.remove('flash');
+    void els.capacityFlash.offsetWidth;
+    els.capacityFlash.classList.add('flash');
+    showAlert('السعة القصوى', `وصل العدد إلى ${net} من أصل ${cap}`);
+  }
+
+  function showAlert(title, text) {
+    els.alertTitle.textContent = title;
+    els.alertText.textContent = text;
+    els.alertModal.hidden = false;
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Camera
+  // ─────────────────────────────────────────────────────────────────────────────
   async function loadModel() {
     setStatus('تحميل نموذج الكشف...');
     try {
@@ -133,7 +376,6 @@
       setStatus('النموذج جاهز', 'ok');
     } catch (err) {
       setStatus('فشل تحميل النموذج', 'error');
-      console.error(err);
       throw err;
     }
   }
@@ -159,6 +401,8 @@
       await els.video.play();
       resizeOverlay();
       els.empty.classList.add('hidden');
+      els.lineHandle.hidden = false;
+      positionLineHandle();
       setStatus('الكاميرا تعمل', 'ok');
     } catch (err) {
       setStatus('تعذّر فتح الكاميرا: ' + (err.message || err.name), 'error');
@@ -183,9 +427,13 @@
     o.height = Math.round(rect.height * dpr);
     o.style.width = rect.width + 'px';
     o.style.height = rect.height + 'px';
+    positionLineHandle();
   }
   window.addEventListener('resize', resizeOverlay);
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Line + drag
+  // ─────────────────────────────────────────────────────────────────────────────
   function getLineCoords(w, h) {
     const pos = state.settings.linePos / 100;
     if (state.settings.lineOrient === 'horizontal') {
@@ -197,7 +445,69 @@
     }
   }
 
-  function drawOverlay(detections, lineCrossings) {
+  function positionLineHandle() {
+    if (!els.cameraWrap || els.lineHandle.hidden) return;
+    const rect = els.cameraWrap.getBoundingClientRect();
+    if (!rect.width) return;
+    const orient = state.settings.lineOrient;
+    const pct = state.settings.linePos;
+    els.lineHandle.classList.toggle('horizontal', orient === 'horizontal');
+    els.lineHandle.classList.toggle('vertical', orient === 'vertical');
+    if (orient === 'horizontal') {
+      els.lineHandle.style.top = pct + '%';
+      els.lineHandle.style.left = '0';
+      els.lineHandle.style.right = '0';
+      els.lineHandle.style.bottom = '';
+    } else {
+      els.lineHandle.style.left = pct + '%';
+      els.lineHandle.style.top = '0';
+      els.lineHandle.style.bottom = '0';
+      els.lineHandle.style.right = '';
+    }
+  }
+
+  function bindLineDrag() {
+    let dragging = false;
+    const onDown = (e) => {
+      dragging = true;
+      els.lineHandle.classList.add('dragging');
+      els.dragHint.classList.add('hidden');
+      e.preventDefault();
+    };
+    const onMove = (e) => {
+      if (!dragging) return;
+      const rect = els.cameraWrap.getBoundingClientRect();
+      const point = e.touches ? e.touches[0] : e;
+      let pct;
+      if (state.settings.lineOrient === 'horizontal') {
+        pct = ((point.clientY - rect.top) / rect.height) * 100;
+      } else {
+        pct = ((point.clientX - rect.left) / rect.width) * 100;
+      }
+      pct = Math.max(5, Math.min(95, pct));
+      state.settings.linePos = Math.round(pct);
+      els.linePos.value = String(state.settings.linePos);
+      els.linePosVal.textContent = state.settings.linePos + '%';
+      positionLineHandle();
+      e.preventDefault();
+    };
+    const onUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      els.lineHandle.classList.remove('dragging');
+      saveState();
+      sharePush();
+    };
+    els.lineHandle.addEventListener('pointerdown', onDown);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Drawing
+  // ─────────────────────────────────────────────────────────────────────────────
+  function drawOverlay() {
     const ctx = els.overlay.getContext('2d');
     const W = els.overlay.width, H = els.overlay.height;
     ctx.clearRect(0, 0, W, H);
@@ -231,7 +541,7 @@
       const [bx, by, bw, bh] = t.bbox;
       const [x1, y1] = transform(bx, by);
       const [x2, y2] = transform(bx + bw, by + bh);
-      const color = t.counted ? 'rgba(16,185,129,0.9)' : 'rgba(255,255,255,0.85)';
+      const color = t.counted ? 'rgba(16,185,129,0.95)' : 'rgba(255,255,255,0.85)';
       ctx.strokeStyle = color;
       ctx.lineWidth = 2 * dpr;
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
@@ -250,39 +560,28 @@
       ctx.arc(cx, cy, 4 * dpr, 0, Math.PI * 2);
       ctx.fill();
     }
-
-    if (lineCrossings && lineCrossings.length) {
-      ctx.fillStyle = 'rgba(59,130,246,0.18)';
-      ctx.fillRect(0, 0, W, H);
-    }
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tracking + counting
+  // ─────────────────────────────────────────────────────────────────────────────
   function iou(a, b) {
     const [ax, ay, aw, ah] = a;
     const [bx, by, bw, bh] = b;
-    const x1 = Math.max(ax, bx);
-    const y1 = Math.max(ay, by);
-    const x2 = Math.min(ax + aw, bx + bw);
-    const y2 = Math.min(ay + ah, by + bh);
-    const iw = Math.max(0, x2 - x1);
-    const ih = Math.max(0, y2 - y1);
-    const inter = iw * ih;
+    const x1 = Math.max(ax, bx), y1 = Math.max(ay, by);
+    const x2 = Math.min(ax + aw, bx + bw), y2 = Math.min(ay + ah, by + bh);
+    const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
     const union = aw * ah + bw * bh - inter;
     return union > 0 ? inter / union : 0;
   }
-
-  function dist(a, b) {
-    const dx = a[0] - b[0], dy = a[1] - b[1];
-    return Math.hypot(dx, dy);
-  }
+  const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
   function updateTracks(detections, vw, vh) {
-    const TRACK_TIMEOUT = 1500;
-    const MIN_IOU = 0.2;
+    const TIMEOUT = 1500, MIN_IOU = 0.2;
     const MAX_DIST = Math.min(vw, vh) * 0.25;
     const now = Date.now();
-
     const used = new Set();
+
     for (const t of state.tracks) {
       let bestIdx = -1, bestScore = -1;
       for (let i = 0; i < detections.length; i++) {
@@ -299,12 +598,8 @@
         const d = detections[bestIdx];
         used.add(bestIdx);
         t.prevCx = t.cx; t.prevCy = t.cy;
-        t.bbox = d.bbox;
-        t.cx = d.cx; t.cy = d.cy;
-        t.score = d.score;
-        t.lastSeen = now;
-        t.history.push([d.cx, d.cy, now]);
-        if (t.history.length > 30) t.history.shift();
+        t.bbox = d.bbox; t.cx = d.cx; t.cy = d.cy;
+        t.score = d.score; t.lastSeen = now;
       }
     }
 
@@ -313,58 +608,48 @@
       const d = detections[i];
       state.tracks.push({
         id: state.nextTrackId++,
-        bbox: d.bbox,
-        cx: d.cx, cy: d.cy,
+        bbox: d.bbox, cx: d.cx, cy: d.cy,
         prevCx: d.cx, prevCy: d.cy,
-        score: d.score,
-        lastSeen: now,
-        history: [[d.cx, d.cy, now]],
-        counted: false,
-        side: null,
+        score: d.score, lastSeen: now,
+        counted: false, side: null,
       });
     }
-
-    state.tracks = state.tracks.filter(t => now - t.lastSeen < TRACK_TIMEOUT);
+    state.tracks = state.tracks.filter(t => now - t.lastSeen < TIMEOUT);
   }
 
   function checkLineCrossings(vw, vh) {
     const line = getLineCoords(vw, vh);
-    const crossings = [];
     for (const t of state.tracks) {
       const cur = line.axis === 'y' ? t.cy : t.cx;
       const prev = line.axis === 'y' ? t.prevCy : t.prevCx;
       const curSide = cur < line.value ? 'neg' : 'pos';
 
-      if (t.side === null) {
-        t.side = curSide;
-        continue;
-      }
+      if (t.side === null) { t.side = curSide; continue; }
       if (t.side !== curSide && !t.counted) {
         const movingPositive = (prev < line.value && cur >= line.value);
         const movingNegative = (prev > line.value && cur <= line.value);
         if (movingPositive || movingNegative) {
           const isEntry = (state.settings.entryDir === 'positive' && movingPositive)
                        || (state.settings.entryDir === 'negative' && movingNegative);
-          if (isEntry) {
-            state.countIn++;
-            logEvent('in');
-          } else {
-            state.countOut++;
-            logEvent('out');
-          }
+          if (isEntry) state.countIn++; else state.countOut++;
+          logEvent(isEntry ? 'in' : 'out');
+          feedback(isEntry ? 'in' : 'out');
           t.counted = true;
-          crossings.push({ id: t.id, type: isEntry ? 'in' : 'out' });
           updateCounters();
+          updateCapacityUI();
+          checkCapacity();
+          sharePush();
         }
         t.side = curSide;
       }
     }
-    return crossings;
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Detection loop
+  // ─────────────────────────────────────────────────────────────────────────────
   async function detectLoop() {
     if (!state.running) return;
-
     const now = performance.now();
     const v = els.video;
     const vw = v.videoWidth, vh = v.videoHeight;
@@ -393,20 +678,18 @@
 
         els.people.textContent = `${persons.length} شخص`;
         updateTracks(persons, vw, vh);
-        const crossings = checkLineCrossings(vw, vh);
-        drawOverlay(persons, crossings);
-      } catch (err) {
-        console.error('detect error', err);
-      } finally {
-        state.inferring = false;
-      }
+        checkLineCrossings(vw, vh);
+        drawOverlay();
+      } catch {} finally { state.inferring = false; }
     } else if (vw && vh) {
-      drawOverlay([], []);
+      drawOverlay();
     }
-
     state.rafId = requestAnimationFrame(detectLoop);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Lifecycle
+  // ─────────────────────────────────────────────────────────────────────────────
   async function start() {
     if (state.running) return;
     els.btnStart.disabled = true;
@@ -427,6 +710,7 @@
     stopCamera();
     state.tracks = [];
     els.empty.classList.remove('hidden');
+    els.lineHandle.hidden = true;
     els.btnStart.disabled = false;
     els.btnStop.disabled = true;
     setStatus('متوقف');
@@ -436,68 +720,268 @@
 
   function reset() {
     if (!confirm('تصفير العدّاد وسجل اليوم؟')) return;
-    state.countIn = 0;
-    state.countOut = 0;
-    state.history = [];
-    state.tracks = [];
+    state.countIn = 0; state.countOut = 0;
+    state.history = []; state.tracks = [];
+    state.capacityAlerted = false;
     updateCounters();
+    updateCapacityUI();
     renderHistory();
+    renderChart();
     saveState();
+    sharePush();
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Export — CSV
+  // ─────────────────────────────────────────────────────────────────────────────
   function exportCSV() {
-    if (!state.history.length) {
-      alert('لا توجد بيانات للتصدير');
-      return;
-    }
+    if (!state.history.length) { alert('لا توجد بيانات للتصدير'); return; }
     const rows = [['التاريخ', 'الوقت', 'الحدث']];
     for (const e of state.history) {
       const d = new Date(e.t);
-      rows.push([
-        d.toLocaleDateString('en-CA'),
-        d.toLocaleTimeString('en-GB'),
-        e.type === 'in' ? 'دخول' : 'خروج',
-      ]);
+      rows.push([d.toLocaleDateString('en-CA'), d.toLocaleTimeString('en-GB'), e.type === 'in' ? 'دخول' : 'خروج']);
     }
     rows.push([]);
     rows.push(['إجمالي الدخول', state.countIn]);
     rows.push(['إجمالي الخروج', state.countOut]);
     rows.push(['داخل الآن', Math.max(0, state.countIn - state.countOut)]);
-
     const csv = '﻿' + rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
     a.download = `door-counter-${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Export — PDF (via print dialog → save as PDF)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function exportPDF() {
+    const date = new Date().toLocaleDateString('ar-SA', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const time = new Date().toLocaleTimeString('ar-SA');
+    const net = Math.max(0, state.countIn - state.countOut);
+    const cap = state.settings.capacityMax || 0;
+    const chartSvg = els.chartSvg.outerHTML;
+    const fmt = new Intl.DateTimeFormat('ar-SA', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    const eventsHTML = state.history.length
+      ? state.history.slice().reverse().map(e => `
+        <tr>
+          <td>${e.type === 'in' ? '↓ دخول' : '↑ خروج'}</td>
+          <td>${fmt.format(new Date(e.t))}</td>
+        </tr>`).join('')
+      : '<tr><td colspan="2" style="text-align:center;color:#888">لا توجد أحداث</td></tr>';
+
+    const html = `<!DOCTYPE html>
+<html lang="ar" dir="rtl"><head>
+<meta charset="utf-8"><title>تقرير عدّاد الباب — ${date}</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Tahoma, sans-serif; padding: 24px; color: #111; max-width: 800px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: #666; font-size: 12px; margin-bottom: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px; }
+  .card { border: 1px solid #ddd; border-radius: 12px; padding: 16px; text-align: center; }
+  .card .lbl { font-size: 11px; color: #666; }
+  .card .val { font-size: 28px; font-weight: bold; margin-top: 4px; }
+  .card.in .val { color: #059669; }
+  .card.out .val { color: #dc2626; }
+  .card.net .val { color: #2563eb; }
+  h2 { font-size: 15px; margin: 24px 0 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 6px 8px; text-align: right; border-bottom: 1px solid #eee; }
+  th { background: #f7f7f8; font-weight: 600; }
+  .chart-box svg { width: 100%; height: 180px; }
+  .chart-box svg text { fill: #444 !important; }
+  .chart-box svg line { stroke: #ddd !important; }
+  .footer { margin-top: 32px; font-size: 11px; color: #888; text-align: center; }
+  @media print { body { padding: 8px; } }
+</style></head><body>
+  <h1>تقرير عدّاد الداخلين</h1>
+  <div class="sub">${date} — ${time}</div>
+
+  <div class="grid">
+    <div class="card in"><div class="lbl">إجمالي الدخول</div><div class="val">${state.countIn}</div></div>
+    <div class="card out"><div class="lbl">إجمالي الخروج</div><div class="val">${state.countOut}</div></div>
+    <div class="card net"><div class="lbl">داخل الآن${cap ? ` (السعة ${cap})` : ''}</div><div class="val">${net}</div></div>
+  </div>
+
+  <h2>الازدحام بالساعة</h2>
+  <div class="chart-box">${chartSvg}</div>
+
+  <h2>سجل الأحداث (${state.history.length})</h2>
+  <table>
+    <thead><tr><th>الحدث</th><th>الوقت</th></tr></thead>
+    <tbody>${eventsHTML}</tbody>
+  </table>
+
+  <div class="footer">تم إنشاء التقرير بواسطة عدّاد الداخلين • door-counter</div>
+  <script>window.addEventListener('load',()=>setTimeout(()=>window.print(),300));</script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) { alert('السماح بالنوافذ المنبثقة لتصدير PDF'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Sharing — Firebase Realtime DB
+  // ─────────────────────────────────────────────────────────────────────────────
+  const share = {
+    enabled: false,
+    db: null,
+    role: null,        // 'host' | 'viewer'
+    code: null,
+    ref: null,
+    unsubscribe: null,
+  };
+
+  function initFirebase() {
+    if (typeof firebase === 'undefined') return false;
+    if (typeof window.FIREBASE_CONFIG === 'undefined') return false;
+    try {
+      if (!firebase.apps.length) firebase.initializeApp(window.FIREBASE_CONFIG);
+      share.db = firebase.database();
+      share.enabled = true;
+      return true;
+    } catch (err) {
+      console.warn('Firebase init failed', err);
+      return false;
+    }
+  }
+
+  function genCode() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let s = '';
+    for (let i = 0; i < 6; i++) s += chars[Math.floor(Math.random() * chars.length)];
+    return s;
+  }
+
+  function snapshot() {
+    return {
+      countIn: state.countIn,
+      countOut: state.countOut,
+      net: Math.max(0, state.countIn - state.countOut),
+      capacityMax: state.settings.capacityMax || 0,
+      history: state.history.slice(-100),
+      updatedAt: Date.now(),
+    };
+  }
+
+  async function sharePush() {
+    if (!share.enabled || share.role !== 'host' || !share.ref) return;
+    try { await share.ref.set(snapshot()); } catch {}
+  }
+
+  async function startHost() {
+    if (!initFirebase()) {
+      showShareStatus('Firebase غير مفعّل — راجع README لإعداد المشاركة', 'error');
+      return;
+    }
+    try {
+      const code = genCode();
+      share.role = 'host';
+      share.code = code;
+      share.ref = share.db.ref('rooms/' + code);
+      await share.ref.set(snapshot());
+      share.ref.onDisconnect().remove();
+
+      const url = `${location.origin}${location.pathname}?room=${code}`;
+      els.shareCode.textContent = code;
+      els.shareLink.value = url;
+      els.shareResult.hidden = false;
+      els.btnHostStart.disabled = true;
+      showShareStatus('الجلسة مفعّلة — شارك الكود مع الجوال الآخر', '');
+
+      els.shareQR.innerHTML = '';
+      if (typeof QRCode !== 'undefined') {
+        QRCode.toCanvas(url, { width: 200, margin: 1, color: { dark: '#0f172a', light: '#fff' } }, (err, canvas) => {
+          if (!err && canvas) els.shareQR.appendChild(canvas);
+        });
+      }
+    } catch (err) {
+      showShareStatus('فشل إنشاء الجلسة: ' + (err.message || ''), 'error');
+    }
+  }
+
+  async function stopHost() {
+    if (share.ref) { try { await share.ref.remove(); } catch {} }
+    share.role = null; share.code = null; share.ref = null;
+    els.shareResult.hidden = true;
+    els.btnHostStart.disabled = false;
+    showShareStatus('تم إنهاء الجلسة', '');
+  }
+
+  function startViewer(code) {
+    if (!initFirebase()) {
+      showShareStatus('Firebase غير مفعّل', 'error');
+      return;
+    }
+    code = (code || '').trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(code)) {
+      showShareStatus('الكود يجب أن يكون 6 أحرف/أرقام', 'error');
+      return;
+    }
+    share.role = 'viewer';
+    share.code = code;
+    share.ref = share.db.ref('rooms/' + code);
+    state.mode = 'viewer';
+    els.body.dataset.mode = 'viewer';
+    els.modeBadge.textContent = 'مشاهد — ' + code;
+
+    share.ref.on('value', (snap) => {
+      const data = snap.val();
+      if (!data) {
+        showShareStatus('الجلسة غير موجودة أو انتهت', 'error');
+        return;
+      }
+      state.countIn = data.countIn || 0;
+      state.countOut = data.countOut || 0;
+      state.history = data.history || [];
+      state.settings.capacityMax = data.capacityMax || 0;
+      updateCounters();
+      updateCapacityUI();
+      renderHistory();
+      renderChart();
+      showShareStatus(`متصل بالجلسة ${code} • آخر تحديث: ${new Date(data.updatedAt).toLocaleTimeString('ar-SA')}`, '');
+    });
+
+    closeShareModal();
+  }
+
+  function showShareStatus(text, kind) {
+    els.shareStatus.textContent = text;
+    els.shareStatus.className = 'share-status' + (kind ? ' ' + kind : '');
+    els.shareStatus.hidden = !text;
+  }
+
+  function openShareModal() { els.shareModal.hidden = false; }
+  function closeShareModal() { els.shareModal.hidden = true; }
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Events binding
+  // ─────────────────────────────────────────────────────────────────────────────
   function bindEvents() {
     els.btnStart.addEventListener('click', start);
     els.btnStop.addEventListener('click', stop);
     els.btnReset.addEventListener('click', reset);
     els.btnExport.addEventListener('click', exportCSV);
-    els.btnSettings.addEventListener('click', () => {
-      els.settings.open = !els.settings.open;
-    });
+    els.btnPDF.addEventListener('click', exportPDF);
+    els.btnShare.addEventListener('click', openShareModal);
+    els.btnSettings.addEventListener('click', () => { els.settings.open = !els.settings.open; });
 
     els.lineOrient.addEventListener('change', e => {
       state.settings.lineOrient = e.target.value;
+      positionLineHandle();
       saveState();
     });
     els.linePos.addEventListener('input', e => {
       state.settings.linePos = +e.target.value;
       els.linePosVal.textContent = state.settings.linePos + '%';
+      positionLineHandle();
       saveState();
     });
-    els.entryDir.addEventListener('change', e => {
-      state.settings.entryDir = e.target.value;
-      saveState();
-    });
+    els.entryDir.addEventListener('change', e => { state.settings.entryDir = e.target.value; saveState(); });
     els.confThreshold.addEventListener('input', e => {
       state.settings.confThreshold = +e.target.value / 100;
       els.confVal.textContent = e.target.value + '%';
@@ -506,17 +990,47 @@
     els.cameraFacing.addEventListener('change', async e => {
       state.settings.cameraFacing = e.target.value;
       saveState();
-      if (state.running) {
-        stopCamera();
-        try { await startCamera(); } catch {}
-      }
+      if (state.running) { stopCamera(); try { await startCamera(); } catch {} }
+    });
+    els.capacityMax.addEventListener('change', e => {
+      state.settings.capacityMax = Math.max(0, +e.target.value || 0);
+      updateCapacityUI();
+      saveState();
+      sharePush();
+    });
+    els.hapticOn.addEventListener('change', e => { state.settings.hapticOn = e.target.checked; saveState(); });
+    els.soundOn.addEventListener('change', e => { state.settings.soundOn = e.target.checked; saveState(); });
+
+    bindLineDrag();
+
+    els.shareClose.addEventListener('click', closeShareModal);
+    els.shareModal.addEventListener('click', (e) => {
+      if (e.target === els.shareModal) closeShareModal();
+    });
+    els.tabHost.addEventListener('click', () => switchShareTab('host'));
+    els.tabJoin.addEventListener('click', () => switchShareTab('join'));
+    els.btnHostStart.addEventListener('click', startHost);
+    els.btnHostStop.addEventListener('click', stopHost);
+    els.btnJoin.addEventListener('click', () => startViewer(els.joinCode.value));
+    els.joinCode.addEventListener('input', (e) => {
+      e.target.value = e.target.value.toUpperCase();
+    });
+    els.btnCopyLink.addEventListener('click', () => {
+      els.shareLink.select();
+      navigator.clipboard?.writeText(els.shareLink.value).then(() => {
+        els.btnCopyLink.textContent = 'تم!';
+        setTimeout(() => { els.btnCopyLink.textContent = 'نسخ'; }, 1500);
+      });
     });
 
-    document.addEventListener('visibilitychange', () => {
-      if (document.hidden && state.running) {
-        // keep running but lower rate could be added; iOS may pause anyway
-      }
-    });
+    els.alertClose.addEventListener('click', () => { els.alertModal.hidden = true; });
+  }
+
+  function switchShareTab(tab) {
+    els.tabHost.classList.toggle('active', tab === 'host');
+    els.tabJoin.classList.toggle('active', tab === 'join');
+    els.paneHost.hidden = tab !== 'host';
+    els.paneJoin.hidden = tab !== 'join';
   }
 
   function checkSupport() {
@@ -533,6 +1047,12 @@
     return true;
   }
 
+  function maybeJoinFromURL() {
+    const params = new URLSearchParams(location.search);
+    const room = params.get('room');
+    if (room) startViewer(room);
+  }
+
   function init() {
     loadState();
     syncUIFromSettings();
@@ -543,6 +1063,8 @@
     if ('serviceWorker' in navigator) {
       navigator.serviceWorker.register('sw.js').catch(() => {});
     }
+
+    maybeJoinFromURL();
   }
 
   init();

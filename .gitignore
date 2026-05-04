@@ -1,0 +1,4 @@
+firebase-config.js
+.DS_Store
+.vscode/
+*.log

@@ -8,17 +8,21 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="عدّاد الباب" />
   <link rel="manifest" href="manifest.json" />
-  <link rel="apple-touch-icon" href="icon-192.png" />
+  <link rel="icon" type="image/svg+xml" href="icon.svg" />
+  <link rel="apple-touch-icon" href="icon.svg" />
   <title>عدّاد الداخلين</title>
   <link rel="stylesheet" href="style.css" />
 </head>
-<body>
+<body data-mode="host">
   <header class="topbar">
     <div class="brand">
       <span class="dot"></span>
       <h1>عدّاد الداخلين</h1>
     </div>
-    <div class="status" id="status">جاري التحميل...</div>
+    <div class="topbar-right">
+      <span class="badge-mode" id="modeBadge">جهاز العدّ</span>
+      <span class="status" id="status">جاري التحميل...</span>
+    </div>
   </header>
 
   <main class="stage">
@@ -31,30 +35,62 @@
         <span class="label">خروج</span>
         <span class="value" id="countOut">0</span>
       </div>
-      <div class="counter-card net">
+      <div class="counter-card net" id="netCard">
         <span class="label">داخل الآن</span>
         <span class="value" id="countNet">0</span>
+        <span class="capacity-hint" id="capacityHint"></span>
       </div>
     </section>
 
-    <section class="camera-wrap">
+    <section class="capacity-bar" id="capacityBar" hidden>
+      <div class="capacity-fill" id="capacityFill"></div>
+      <span class="capacity-text" id="capacityText">0 / 0</span>
+    </section>
+
+    <section class="camera-wrap" id="cameraWrap">
       <video id="video" playsinline muted autoplay></video>
       <canvas id="overlay"></canvas>
+      <div class="line-handle" id="lineHandle" hidden>
+        <span class="line-handle-grip"></span>
+      </div>
       <div class="cam-info">
         <span id="fps">— FPS</span>
         <span id="people">0 شخص</span>
+        <span class="hint" id="dragHint">اسحب الخط لتحديد عبور الباب</span>
       </div>
       <div class="empty-state" id="emptyState">
-        <p>اضغط <strong>تشغيل</strong> لبدء الكاميرا</p>
+        <div class="empty-card">
+          <div class="empty-icon">📷</div>
+          <h3>جاهز للبدء</h3>
+          <p>ضع الكاميرا تطلّ على الباب من الأعلى</p>
+          <p class="empty-tip">اضغط <strong>تشغيل</strong> لبدء العدّ</p>
+        </div>
       </div>
+      <div class="capacity-flash" id="capacityFlash"></div>
     </section>
 
     <section class="controls">
       <button id="btnStart" class="btn primary">تشغيل</button>
       <button id="btnStop" class="btn" disabled>إيقاف</button>
       <button id="btnReset" class="btn">صفّر</button>
-      <button id="btnExport" class="btn">تصدير CSV</button>
+    </section>
+
+    <section class="controls">
+      <button id="btnExport" class="btn">CSV</button>
+      <button id="btnPDF" class="btn">PDF</button>
+      <button id="btnShare" class="btn">مشاركة</button>
       <button id="btnSettings" class="btn icon" aria-label="إعدادات">⚙</button>
+    </section>
+
+    <section class="chart-section">
+      <div class="chart-head">
+        <h2>الازدحام بالساعة</h2>
+        <span class="chart-sub" id="chartSub">اليوم</span>
+      </div>
+      <div class="chart-wrap">
+        <svg id="hourlyChart" viewBox="0 0 480 160" preserveAspectRatio="none"></svg>
+        <div class="chart-empty" id="chartEmpty">لا توجد بيانات بعد</div>
+      </div>
     </section>
 
     <details class="settings" id="settingsPanel">
@@ -90,6 +126,22 @@
           <option value="user">الأمامية</option>
         </select>
       </div>
+      <hr />
+      <div class="setting-row">
+        <label>السعة القصوى</label>
+        <input id="capacityMax" type="number" min="0" max="9999" value="0" />
+        <span class="setting-hint">٠ = بدون حد</span>
+      </div>
+      <div class="setting-row">
+        <label>اهتزاز عند العد</label>
+        <input id="hapticOn" type="checkbox" checked />
+        <span></span>
+      </div>
+      <div class="setting-row">
+        <label>صوت عند العد</label>
+        <input id="soundOn" type="checkbox" />
+        <span></span>
+      </div>
     </details>
 
     <section class="history">
@@ -98,8 +150,60 @@
     </section>
   </main>
 
+  <div class="modal" id="shareModal" hidden>
+    <div class="modal-card">
+      <button class="modal-close" id="shareClose" aria-label="إغلاق">×</button>
+      <h2>مشاركة الجلسة</h2>
+      <p class="modal-desc" id="shareDesc">شارك الرابط مع جوال آخر ليشاهد العدّاد لايف</p>
+
+      <div class="share-status" id="shareStatus" hidden></div>
+
+      <div class="share-tabs">
+        <button class="share-tab active" data-tab="host" id="tabHost">إنشاء جلسة</button>
+        <button class="share-tab" data-tab="join" id="tabJoin">الانضمام كمشاهد</button>
+      </div>
+
+      <div class="share-pane" data-pane="host" id="paneHost">
+        <p class="share-instr">اضغط الزر لتوليد كود ومشاركة الرابط مع الجوال الآخر</p>
+        <button class="btn primary block" id="btnHostStart">إنشاء جلسة الآن</button>
+
+        <div class="share-result" id="shareResult" hidden>
+          <div class="share-code">
+            <span class="share-code-label">الكود</span>
+            <span class="share-code-value" id="shareCode">——————</span>
+          </div>
+          <div class="share-qr" id="shareQR"></div>
+          <div class="share-link-wrap">
+            <input id="shareLink" readonly />
+            <button class="btn small" id="btnCopyLink">نسخ</button>
+          </div>
+          <button class="btn block" id="btnHostStop">إنهاء الجلسة</button>
+        </div>
+      </div>
+
+      <div class="share-pane" data-pane="join" id="paneJoin" hidden>
+        <p class="share-instr">أدخل كود الجلسة لمشاهدة الأرقام لايف</p>
+        <input id="joinCode" placeholder="ABC123" maxlength="6" autocapitalize="characters" />
+        <button class="btn primary block" id="btnJoin">انضمام</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="alertModal" hidden>
+    <div class="modal-card alert">
+      <div class="alert-icon">⚠️</div>
+      <h2 id="alertTitle">السعة القصوى</h2>
+      <p id="alertText">تم بلوغ السعة القصوى المحددة</p>
+      <button class="btn primary block" id="alertClose">حسناً</button>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/coco-ssd@2.2.3/dist/coco-ssd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script src="firebase-config.js" onerror="console.warn('firebase-config.js not found, sharing disabled')"></script>
   <script src="app.js"></script>
 </body>
 </html>
