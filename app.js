@@ -965,20 +965,36 @@ ${cmpLine}</div>
     try { await share.ref.set(snapshot()); } catch {}
   }
   async function startHost() {
-    if (!initFirebase()) { showShareStatus('Firebase غير مفعّل — راجع README', 'error'); return; }
+    // ① توليد الكود وعرض الرابط فوراً بدون انتظار Firebase
+    const code = genCode();
+    share.role = 'host'; share.code = code;
+    const url = `${location.origin}${location.pathname}?room=${code}`;
+    els.shareCode.textContent = code;
+    els.shareLink.value = url;
+    els.shareResult.hidden = false;
+    els.btnHostStart.disabled = true;
+    showShareStatus('جارٍ تفعيل الجلسة...', '');
+
+    // ② رسم QR
+    els.shareQR.innerHTML = '';
+    if (typeof QRCode !== 'undefined') {
+      QRCode.toCanvas(url, { width: 180, margin: 1, color: { dark: '#0f172a', light: '#f8fafc' } },
+        (err, canvas) => { if (!err) els.shareQR.appendChild(canvas); });
+    }
+
+    // ③ ربط Firebase في الخلفية
+    if (!initFirebase()) {
+      showShareStatus('الكود جاهز (بدون مزامنة لايف)', '');
+      return;
+    }
     try {
-      const code = genCode(); share.role = 'host'; share.code = code;
       share.ref = share.db.ref('rooms/' + code);
-      await share.ref.set(snapshot()); share.ref.onDisconnect().remove();
-      const url = `${location.origin}${location.pathname}?room=${code}`;
-      els.shareCode.textContent = code; els.shareLink.value = url;
-      els.shareResult.hidden = false; els.btnHostStart.disabled = true;
-      showShareStatus('الجلسة مفعّلة — شارك الكود', '');
-      els.shareQR.innerHTML = '';
-      if (typeof QRCode !== 'undefined')
-        QRCode.toCanvas(url, { width: 200, margin: 1, color: { dark: '#0f172a', light: '#fff' } },
-          (err, canvas) => { if (!err) els.shareQR.appendChild(canvas); });
-    } catch (e) { showShareStatus('فشل: ' + (e.message || ''), 'error'); }
+      await share.ref.set(snapshot());
+      share.ref.onDisconnect().remove();
+      showShareStatus('الجلسة مفعّلة — شارك الكود أو QR', '');
+    } catch (e) {
+      showShareStatus('الكود جاهز — تعذّر الاتصال بالسيرفر', 'error');
+    }
   }
   async function stopHost() {
     try { await share.ref?.remove(); } catch {}
@@ -1050,8 +1066,22 @@ ${cmpLine}</div>
     els.btnJoin.addEventListener('click', () => startViewer(els.joinCode.value));
     els.joinCode.addEventListener('input', e => { e.target.value = e.target.value.toUpperCase(); });
     els.btnCopyLink.addEventListener('click', () => {
-      navigator.clipboard?.writeText(els.shareLink.value).then(() => { els.btnCopyLink.textContent = 'تم!'; setTimeout(() => { els.btnCopyLink.textContent = 'نسخ'; }, 1500); });
+      const url = els.shareLink.value;
+      if (navigator.clipboard?.writeText) {
+        navigator.clipboard.writeText(url).then(() => { els.btnCopyLink.textContent = 'تم!'; setTimeout(() => { els.btnCopyLink.textContent = 'نسخ'; }, 1500); });
+      } else {
+        els.shareLink.select(); document.execCommand('copy');
+        els.btnCopyLink.textContent = 'تم!'; setTimeout(() => { els.btnCopyLink.textContent = 'نسخ'; }, 1500);
+      }
     });
+
+    const btnNativeShare = $('btnNativeShare');
+    if (navigator.share) {
+      btnNativeShare.style.display = '';
+      btnNativeShare.addEventListener('click', () => {
+        navigator.share({ title: 'عدّاد الداخلين', text: `الكود: ${share.code}`, url: els.shareLink.value }).catch(() => {});
+      });
+    }
     els.alertClose.addEventListener('click', () => { els.alertModal.hidden = true; });
     bindLineDrag();
   }
