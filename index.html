@@ -136,6 +136,19 @@
           <option value="user">الأمامية</option>
         </select>
       </div>
+      <div class="setting-row">
+        <label>نموذج الكشف</label>
+        <select id="modelBase">
+          <option value="mobilenet_v2">دقيق (افتراضي)</option>
+          <option value="lite_mobilenet_v2">سريع (للأجهزة القديمة)</option>
+        </select>
+        <span class="setting-hint">يحتاج إعادة تشغيل</span>
+      </div>
+      <div class="setting-row">
+        <label>إظهار الكشف الضعيف</label>
+        <input id="showWeak" type="checkbox" checked />
+        <span class="setting-hint">للتشخيص</span>
+      </div>
       <hr />
       <div class="setting-row">
         <label>السعة القصوى</label>

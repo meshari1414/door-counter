@@ -45,6 +45,8 @@
     minConfirmFrames: $('minConfirmFrames'),
     minFramesVal: $('minFramesVal'),
     cameraFacing: $('cameraFacing'),
+    modelBase: $('modelBase'),
+    showWeak: $('showWeak'),
     capacityMax: $('capacityMax'),
     hapticOn: $('hapticOn'),
     soundOn: $('soundOn'),
@@ -92,20 +94,23 @@
     tracks: [],
     nextTrackId: 1,
     lastDetectionAt: 0,
-    detectionIntervalMs: 100,
+    detectionIntervalMs: 60,
+    weakDetections: [],
     fpsSamples: [],
     history: [],
     settings: {
       lineOrient: 'horizontal',
       linePos: 50,
       entryDir: 'positive',
-      confThreshold: 0.55,
+      confThreshold: 0.40,
       cameraFacing: 'environment',
       capacityMax: 0,
       hapticOn: true,
       soundOn: false,
-      bufferZone: 15,        // % of frame on each side of line — hysteresis band
-      minConfirmFrames: 2,   // frames track must hold a zone before it's "confirmed"
+      bufferZone: 10,
+      minConfirmFrames: 1,
+      modelBase: 'mobilenet_v2',  // 'lite_mobilenet_v2' = أسرع | 'mobilenet_v2' = أدق
+      showWeak: true,             // عرض الكشوفات الضعيفة (تشخيصي)
     },
     mode: 'host',
     audioCtx: null,
@@ -161,6 +166,8 @@
     els.minConfirmFrames.value = String(state.settings.minConfirmFrames);
     els.minFramesVal.textContent = String(state.settings.minConfirmFrames);
     els.cameraFacing.value = state.settings.cameraFacing;
+    els.modelBase.value = state.settings.modelBase || 'mobilenet_v2';
+    els.showWeak.checked = !!state.settings.showWeak;
     els.capacityMax.value = String(state.settings.capacityMax || 0);
     els.hapticOn.checked = !!state.settings.hapticOn;
     els.soundOn.checked = !!state.settings.soundOn;
@@ -382,11 +389,18 @@
     setStatus('تحميل نموذج الكشف...');
     try {
       await tf.ready();
-      state.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
-      setStatus('النموذج جاهز', 'ok');
+      const base = state.settings.modelBase || 'mobilenet_v2';
+      state.model = await cocoSsd.load({ base });
+      setStatus(`النموذج جاهز (${base === 'mobilenet_v2' ? 'دقيق' : 'سريع'})`, 'ok');
     } catch (err) {
-      setStatus('فشل تحميل النموذج', 'error');
-      throw err;
+      // Fallback to lite model on memory/load error
+      try {
+        state.model = await cocoSsd.load({ base: 'lite_mobilenet_v2' });
+        setStatus('النموذج جاهز (سريع — احتياطي)', 'ok');
+      } catch (err2) {
+        setStatus('فشل تحميل النموذج', 'error');
+        throw err2;
+      }
     }
   }
 
@@ -571,6 +585,23 @@
     }
     ctx.setLineDash([]);
 
+    // Weak detections (below threshold) — shown faintly for diagnostic
+    if (state.weakDetections && state.weakDetections.length) {
+      ctx.strokeStyle = 'rgba(148,163,184,0.5)';
+      ctx.lineWidth = 1 * dpr;
+      ctx.setLineDash([3 * dpr, 3 * dpr]);
+      ctx.font = `${10 * dpr}px system-ui`;
+      for (const w of state.weakDetections) {
+        const [bx, by, bw, bh] = w.bbox;
+        const [wx1, wy1] = transform(bx, by);
+        const [wx2, wy2] = transform(bx + bw, by + bh);
+        ctx.strokeRect(wx1, wy1, wx2 - wx1, wy2 - wy1);
+        ctx.fillStyle = 'rgba(148,163,184,0.85)';
+        ctx.fillText(`${(w.score * 100).toFixed(0)}%`, wx1 + 2 * dpr, wy1 + 12 * dpr);
+      }
+      ctx.setLineDash([]);
+    }
+
     // Main crossing line
     const [lx1, ly1] = transform(line.x1, line.y1);
     const [lx2, ly2] = transform(line.x2, line.y2);
@@ -660,8 +691,8 @@
   }
 
   function updateTracks(detections, vw, vh) {
-    const TIMEOUT = 2500, MIN_IOU = 0.2;
-    const MAX_DIST = Math.min(vw, vh) * 0.3;
+    const TIMEOUT = 3000, MIN_IOU = 0.15;
+    const MAX_DIST = Math.min(vw, vh) * 0.4;
     const ALPHA = 0.55; // EMA smoothing factor
     const now = Date.now();
     const used = new Set();
@@ -774,17 +805,21 @@
         const avg = state.fpsSamples.reduce((a, b) => a + b, 0) / state.fpsSamples.length;
         els.fps.textContent = `${(1000 / Math.max(avg, 1)).toFixed(1)} FPS`;
 
-        const personsRaw = preds
-          .filter(p => p.class === 'person' && p.score >= state.settings.confThreshold)
+        const allPersons = preds
+          .filter(p => p.class === 'person')
           .map(p => ({
             bbox: p.bbox,
             cx: p.bbox[0] + p.bbox[2] / 2,
             cy: p.bbox[1] + p.bbox[3] / 2,
             score: p.score,
           }));
+        const personsRaw = allPersons.filter(p => p.score >= state.settings.confThreshold);
+        const weakRaw = allPersons.filter(p => p.score < state.settings.confThreshold && p.score >= 0.18);
         const persons = nms(personsRaw, 0.5);
+        state.weakDetections = state.settings.showWeak ? nms(weakRaw, 0.5) : [];
 
-        els.people.textContent = `${persons.length} شخص`;
+        const weakLabel = state.weakDetections.length ? ` (+${state.weakDetections.length} ضعيف)` : '';
+        els.people.textContent = `${persons.length} شخص${weakLabel}`;
         updateTracks(persons, vw, vh);
         checkLineCrossings(vw, vh);
         drawOverlay();
@@ -1109,6 +1144,16 @@
       state.settings.cameraFacing = e.target.value;
       saveState();
       if (state.running) { stopCamera(); try { await startCamera(); } catch {} }
+    });
+    els.modelBase.addEventListener('change', e => {
+      state.settings.modelBase = e.target.value;
+      state.model = null;
+      saveState();
+      setStatus('أعد التشغيل لتحميل النموذج الجديد');
+    });
+    els.showWeak.addEventListener('change', e => {
+      state.settings.showWeak = e.target.checked;
+      saveState();
     });
     els.capacityMax.addEventListener('change', e => {
       state.settings.capacityMax = Math.max(0, +e.target.value || 0);
