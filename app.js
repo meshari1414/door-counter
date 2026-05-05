@@ -19,7 +19,7 @@
     empty: $('emptyState'),
     btnStart: $('btnStart'), btnStop: $('btnStop'),
     btnReset: $('btnReset'), btnDashboard: $('btnDashboard'),
-    btnExport: $('btnExport'), btnPDF: $('btnPDF'),
+    btnExport: $('btnExport'),
     btnShare: $('btnShare'), btnSettings: $('btnSettings'),
     settings: $('settingsPanel'),
     // Settings inputs
@@ -1212,7 +1212,6 @@ ${cmpLine}</div>
     els.btnStop.addEventListener('click', stop);
     els.btnReset.addEventListener('click', reset);
     els.btnExport.addEventListener('click', exportCSV);
-    els.btnPDF.addEventListener('click', exportPDF);
     $('btnCard').addEventListener('click', shareCard);
     els.btnShare.addEventListener('click', openShareModal);
     els.btnSettings.addEventListener('click', () => { els.settings.open = !els.settings.open; });
