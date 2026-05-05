@@ -878,6 +878,186 @@
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
+  // Stats Card (Canvas → Share / Download)
+  // ─────────────────────────────────────────────────────────────────────────────
+  function rr(ctx, x, y, w, h, r) {
+    if (typeof r === 'number') r = [r, r, r, r];
+    ctx.beginPath();
+    ctx.moveTo(x + r[0], y);
+    ctx.lineTo(x + w - r[1], y);       ctx.quadraticCurveTo(x + w, y,     x + w, y + r[1]);
+    ctx.lineTo(x + w, y + h - r[2]);   ctx.quadraticCurveTo(x + w, y + h, x + w - r[2], y + h);
+    ctx.lineTo(x + r[3], y + h);       ctx.quadraticCurveTo(x, y + h,     x, y + h - r[3]);
+    ctx.lineTo(x, y + r[0]);           ctx.quadraticCurveTo(x, y,         x + r[0], y);
+    ctx.closePath();
+  }
+
+  function shareCard() {
+    const W = 800, H = 500, dpr = 2;
+    const cvs = document.createElement('canvas');
+    cvs.width = W * dpr; cvs.height = H * dpr;
+    const ctx = cvs.getContext('2d');
+    ctx.scale(dpr, dpr);
+    ctx.direction = 'rtl';
+
+    // ── Background
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(0, 0, W, H);
+
+    // Subtle grid lines
+    ctx.strokeStyle = 'rgba(255,255,255,0.025)'; ctx.lineWidth = 1;
+    for (let x = 0; x < W; x += 50) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+    for (let y = 0; y < H; y += 50) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
+
+    // Glow blobs
+    const blob = (cx, cy, cr, color) => {
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, cr);
+      g.addColorStop(0, color); g.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    };
+    blob(120, 80, 220, 'rgba(59,130,246,0.18)');
+    blob(W - 100, H - 80, 180, 'rgba(16,185,129,0.14)');
+
+    // ── Header
+    ctx.fillStyle = '#10b981';
+    ctx.beginPath(); ctx.arc(44, 44, 7, 0, Math.PI * 2); ctx.fill();
+
+    ctx.fillStyle = '#f8fafc';
+    ctx.textAlign = 'right';
+    ctx.font = 'bold 26px system-ui,-apple-system,Arial';
+    ctx.fillText('عدّاد الداخلين', W - 40, 52);
+
+    const dateStr = new Date().toLocaleDateString('ar-SA', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+    ctx.fillStyle = '#64748b';
+    ctx.font = '14px system-ui,-apple-system,Arial';
+    ctx.fillText(dateStr, W - 40, 76);
+
+    // Gradient divider
+    const div = ctx.createLinearGradient(40, 0, W - 40, 0);
+    div.addColorStop(0, 'rgba(16,185,129,0.6)');
+    div.addColorStop(0.5, 'rgba(59,130,246,0.6)');
+    div.addColorStop(1, 'rgba(59,130,246,0)');
+    ctx.strokeStyle = div; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(40, 96); ctx.lineTo(W - 40, 96); ctx.stroke();
+
+    // ── Counter cards
+    const net = Math.max(0, state.countIn - state.countOut);
+    const stats = [
+      { label: 'دخول',      value: state.countIn,  color: '#10b981', glow: 'rgba(16,185,129,0.25)' },
+      { label: 'داخل الآن', value: net,             color: '#3b82f6', glow: 'rgba(59,130,246,0.25)' },
+      { label: 'خروج',      value: state.countOut,  color: '#ef4444', glow: 'rgba(239,68,68,0.22)'  },
+    ];
+    const cW = 198, cH = 130, cY = 112, cGap = 18;
+    const cX0 = (W - (stats.length * cW + (stats.length - 1) * cGap)) / 2;
+
+    stats.forEach((s, i) => {
+      const x = cX0 + i * (cW + cGap);
+      // Glow
+      const cg = ctx.createRadialGradient(x + cW/2, cY + cH/2, 10, x + cW/2, cY + cH/2, cW * 0.75);
+      cg.addColorStop(0, s.glow); cg.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = cg; ctx.fillRect(x - 20, cY - 20, cW + 40, cH + 40);
+      // Card
+      ctx.fillStyle = '#1e293b';
+      rr(ctx, x, cY, cW, cH, 16); ctx.fill();
+      // Border
+      ctx.strokeStyle = s.color + '44'; ctx.lineWidth = 1;
+      rr(ctx, x, cY, cW, cH, 16); ctx.stroke();
+      // Top accent
+      ctx.fillStyle = s.color;
+      rr(ctx, x, cY, cW, 3, [3, 3, 0, 0]); ctx.fill();
+      // Value
+      ctx.fillStyle = s.color;
+      ctx.textAlign = 'center';
+      ctx.font = `bold ${s.value > 9999 ? 40 : s.value > 999 ? 48 : 58}px system-ui,-apple-system,Arial`;
+      ctx.fillText(String(s.value), x + cW / 2, cY + 90);
+      // Label
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '14px system-ui,-apple-system,Arial';
+      ctx.fillText(s.label, x + cW / 2, cY + 116);
+    });
+
+    // ── Hourly chart
+    const chartY = 270, chartH = 110, chartX = 40, chartW = W - 80;
+    const hourly = new Array(24).fill(0);
+    state.history.filter(e => e.type === 'in').forEach(e => hourly[new Date(e.t).getHours()]++);
+    const maxV = Math.max(1, ...hourly);
+    const slotW = chartW / 24, bw = slotW * 0.6;
+    const nowH = new Date().getHours();
+
+    // Chart label
+    ctx.fillStyle = '#94a3b8';
+    ctx.font = '13px system-ui,-apple-system,Arial';
+    ctx.textAlign = 'right';
+    ctx.fillText('الازدحام بالساعة', W - 40, chartY - 8);
+
+    // Bars
+    hourly.forEach((v, h) => {
+      const bh = Math.max(2, (v / maxV) * chartH);
+      const x  = chartX + h * slotW + (slotW - bw) / 2;
+      const y  = chartY + chartH - bh;
+      const isNow = h === nowH;
+      if (v > 0) {
+        const bg = ctx.createLinearGradient(0, y, 0, y + bh);
+        bg.addColorStop(0, isNow ? '#fbbf24' : '#3b82f6');
+        bg.addColorStop(1, isNow ? 'rgba(251,191,36,0.3)' : 'rgba(59,130,246,0.3)');
+        ctx.fillStyle = bg;
+      } else {
+        ctx.fillStyle = '#1e293b';
+      }
+      rr(ctx, x, y, bw, bh, 2); ctx.fill();
+      if (h % 6 === 0) {
+        ctx.fillStyle = '#475569';
+        ctx.font = '10px system-ui,-apple-system,Arial';
+        ctx.textAlign = 'center';
+        ctx.fillText(String(h).padStart(2,'0'), x + bw / 2, chartY + chartH + 14);
+      }
+    });
+
+    // ── Insights row
+    const infoY = chartY + chartH + 34;
+    const peakH = hourly.indexOf(Math.max(...hourly));
+    if (hourly[peakH] > 0) {
+      ctx.fillStyle = '#fbbf24';
+      ctx.font = '13px system-ui,-apple-system,Arial';
+      ctx.textAlign = 'left';
+      ctx.fillText(`⏰  الذروة ${peakH}:00 — ${hourly[peakH]} شخص`, 40, infoY);
+    }
+    const cap = state.settings.capacityMax;
+    if (cap > 0) {
+      const pct = Math.min(100, Math.round((net / cap) * 100));
+      ctx.fillStyle = pct >= 100 ? '#ef4444' : pct >= 85 ? '#fbbf24' : '#10b981';
+      ctx.textAlign = 'right';
+      ctx.font = '13px system-ui,-apple-system,Arial';
+      ctx.fillText(`السعة  ${pct}%  (${net} / ${cap})`, W - 40, infoY);
+    }
+
+    // ── Footer bar
+    ctx.fillStyle = '#0c1524';
+    ctx.fillRect(0, H - 42, W, 42);
+    ctx.strokeStyle = 'rgba(59,130,246,0.2)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, H - 42); ctx.lineTo(W, H - 42); ctx.stroke();
+    ctx.fillStyle = '#334155';
+    ctx.font = '12px system-ui,-apple-system,Arial';
+    ctx.textAlign = 'center';
+    ctx.fillText('meshari1414.github.io/door-counter', W / 2, H - 15);
+
+    // ── Share or download
+    cvs.toBlob(async blob => {
+      const file = new File([blob], `door-counter-${new Date().toISOString().slice(0,10)}.png`, { type: 'image/png' });
+      try {
+        if (navigator.share && navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ title: 'إحصائيات عدّاد الداخلين', files: [file] });
+          return;
+        }
+      } catch {}
+      // Fallback: download
+      const url = URL.createObjectURL(blob);
+      const a = Object.assign(document.createElement('a'), { href: url, download: file.name });
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────────
   // Exports
   // ─────────────────────────────────────────────────────────────────────────────
   function exportCSV() {
@@ -1033,6 +1213,7 @@ ${cmpLine}</div>
     els.btnReset.addEventListener('click', reset);
     els.btnExport.addEventListener('click', exportCSV);
     els.btnPDF.addEventListener('click', exportPDF);
+    $('btnCard').addEventListener('click', shareCard);
     els.btnShare.addEventListener('click', openShareModal);
     els.btnSettings.addEventListener('click', () => { els.settings.open = !els.settings.open; });
     els.btnDashboard.addEventListener('click', openDashboard);

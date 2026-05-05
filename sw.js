@@ -1,4 +1,4 @@
-const CACHE = 'door-counter-v7';
+const CACHE = 'door-counter-v8';
 const ASSETS = [
   './',
   './index.html',
