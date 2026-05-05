@@ -40,6 +40,10 @@
     entryDir: $('entryDir'),
     confThreshold: $('confThreshold'),
     confVal: $('confVal'),
+    bufferZone: $('bufferZone'),
+    bufferVal: $('bufferVal'),
+    minConfirmFrames: $('minConfirmFrames'),
+    minFramesVal: $('minFramesVal'),
     cameraFacing: $('cameraFacing'),
     capacityMax: $('capacityMax'),
     hapticOn: $('hapticOn'),
@@ -100,6 +104,8 @@
       capacityMax: 0,
       hapticOn: true,
       soundOn: false,
+      bufferZone: 15,        // % of frame on each side of line — hysteresis band
+      minConfirmFrames: 2,   // frames track must hold a zone before it's "confirmed"
     },
     mode: 'host',
     audioCtx: null,
@@ -150,6 +156,10 @@
     els.entryDir.value = state.settings.entryDir;
     els.confThreshold.value = String(Math.round(state.settings.confThreshold * 100));
     els.confVal.textContent = Math.round(state.settings.confThreshold * 100) + '%';
+    els.bufferZone.value = String(state.settings.bufferZone);
+    els.bufferVal.textContent = state.settings.bufferZone + '%';
+    els.minConfirmFrames.value = String(state.settings.minConfirmFrames);
+    els.minFramesVal.textContent = String(state.settings.minConfirmFrames);
     els.cameraFacing.value = state.settings.cameraFacing;
     els.capacityMax.value = String(state.settings.capacityMax || 0);
     els.hapticOn.checked = !!state.settings.hapticOn;
@@ -525,7 +535,43 @@
 
     const transform = (x, y) => [(ox + x * scale) * dpr, (oy + y * scale) * dpr];
 
-    const line = getLineCoords(vw, vh);
+    const zones = getZonesFor(vw, vh);
+    const line = zones.line;
+
+    // Draw buffer zones as faint translucent bands
+    if (zones.axis === 'y') {
+      const [zax1, zay1] = transform(0, zones.a);
+      const [zax2, zay2] = transform(vw, zones.b);
+      ctx.fillStyle = 'rgba(59,130,246,0.08)';
+      ctx.fillRect(zax1, zay1, zax2 - zax1, zay2 - zay1);
+      // Buffer boundaries
+      ctx.strokeStyle = 'rgba(59,130,246,0.35)';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([4 * dpr, 6 * dpr]);
+      const [ax1, ay1] = transform(0, zones.a);
+      const [ax2, ay2] = transform(vw, zones.a);
+      ctx.beginPath(); ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2); ctx.stroke();
+      const [bx1, by1] = transform(0, zones.b);
+      const [bx2, by2] = transform(vw, zones.b);
+      ctx.beginPath(); ctx.moveTo(bx1, by1); ctx.lineTo(bx2, by2); ctx.stroke();
+    } else {
+      const [zax1, zay1] = transform(zones.a, 0);
+      const [zax2, zay2] = transform(zones.b, vh);
+      ctx.fillStyle = 'rgba(59,130,246,0.08)';
+      ctx.fillRect(zax1, zay1, zax2 - zax1, zay2 - zay1);
+      ctx.strokeStyle = 'rgba(59,130,246,0.35)';
+      ctx.lineWidth = 1.5 * dpr;
+      ctx.setLineDash([4 * dpr, 6 * dpr]);
+      const [ax1, ay1] = transform(zones.a, 0);
+      const [ax2, ay2] = transform(zones.a, vh);
+      ctx.beginPath(); ctx.moveTo(ax1, ay1); ctx.lineTo(ax2, ay2); ctx.stroke();
+      const [bx1, by1] = transform(zones.b, 0);
+      const [bx2, by2] = transform(zones.b, vh);
+      ctx.beginPath(); ctx.moveTo(bx1, by1); ctx.lineTo(bx2, by2); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    // Main crossing line
     const [lx1, ly1] = transform(line.x1, line.y1);
     const [lx2, ly2] = transform(line.x2, line.y2);
     ctx.strokeStyle = 'rgba(59,130,246,0.95)';
@@ -541,23 +587,28 @@
       const [bx, by, bw, bh] = t.bbox;
       const [x1, y1] = transform(bx, by);
       const [x2, y2] = transform(bx + bw, by + bh);
-      const color = t.counted ? 'rgba(16,185,129,0.95)' : 'rgba(255,255,255,0.85)';
+      const inA = t.lastConfirmedZone === 'A';
+      const inB = t.lastConfirmedZone === 'B';
+      const color = t.counts > 0 ? 'rgba(16,185,129,0.95)'
+                  : inA ? 'rgba(96,165,250,0.95)'
+                  : inB ? 'rgba(251,191,36,0.95)'
+                  : 'rgba(255,255,255,0.85)';
       ctx.strokeStyle = color;
       ctx.lineWidth = 2 * dpr;
       ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
 
       ctx.fillStyle = color;
       ctx.font = `${12 * dpr}px system-ui`;
-      const label = `#${t.id} ${(t.score * 100).toFixed(0)}%`;
+      const label = `#${t.id} ${(t.score * 100).toFixed(0)}% ${t.zone || '·'}`;
       const tw = ctx.measureText(label).width + 8 * dpr;
       ctx.fillRect(x1, y1 - 18 * dpr, tw, 18 * dpr);
       ctx.fillStyle = '#0f172a';
       ctx.fillText(label, x1 + 4 * dpr, y1 - 5 * dpr);
 
-      const [cx, cy] = transform(t.cx, t.cy);
+      const [cx, cy] = transform(t.smoothCx, t.smoothCy);
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(cx, cy, 4 * dpr, 0, Math.PI * 2);
+      ctx.arc(cx, cy, 5 * dpr, 0, Math.PI * 2);
       ctx.fill();
     }
   }
@@ -576,9 +627,42 @@
   }
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
+  function nms(dets, threshold = 0.5) {
+    const sorted = [...dets].sort((a, b) => b.score - a.score);
+    const kept = [];
+    for (const d of sorted) {
+      let suppress = false;
+      for (const k of kept) {
+        if (iou(d.bbox, k.bbox) > threshold) { suppress = true; break; }
+      }
+      if (!suppress) kept.push(d);
+    }
+    return kept;
+  }
+
+  function getZonesFor(vw, vh) {
+    const line = getLineCoords(vw, vh);
+    const dim = line.axis === 'y' ? vh : vw;
+    const buf = (state.settings.bufferZone / 100) * dim;
+    return {
+      line,
+      a: line.value - buf,
+      b: line.value + buf,
+      axis: line.axis,
+    };
+  }
+
+  function classifyZone(t, zones) {
+    const v = zones.axis === 'y' ? t.smoothCy : t.smoothCx;
+    if (v < zones.a) return 'A';
+    if (v > zones.b) return 'B';
+    return 'mid';
+  }
+
   function updateTracks(detections, vw, vh) {
-    const TIMEOUT = 1500, MIN_IOU = 0.2;
-    const MAX_DIST = Math.min(vw, vh) * 0.25;
+    const TIMEOUT = 2500, MIN_IOU = 0.2;
+    const MAX_DIST = Math.min(vw, vh) * 0.3;
+    const ALPHA = 0.55; // EMA smoothing factor
     const now = Date.now();
     const used = new Set();
 
@@ -597,9 +681,15 @@
       if (bestIdx >= 0) {
         const d = detections[bestIdx];
         used.add(bestIdx);
-        t.prevCx = t.cx; t.prevCy = t.cy;
-        t.bbox = d.bbox; t.cx = d.cx; t.cy = d.cy;
-        t.score = d.score; t.lastSeen = now;
+        t.bbox = d.bbox;
+        t.cx = d.cx; t.cy = d.cy;
+        t.smoothCx = ALPHA * d.cx + (1 - ALPHA) * t.smoothCx;
+        t.smoothCy = ALPHA * d.cy + (1 - ALPHA) * t.smoothCy;
+        t.score = d.score;
+        t.lastSeen = now;
+        t.misses = 0;
+      } else {
+        t.misses = (t.misses || 0) + 1;
       }
     }
 
@@ -608,39 +698,56 @@
       const d = detections[i];
       state.tracks.push({
         id: state.nextTrackId++,
-        bbox: d.bbox, cx: d.cx, cy: d.cy,
-        prevCx: d.cx, prevCy: d.cy,
-        score: d.score, lastSeen: now,
-        counted: false, side: null,
+        bbox: d.bbox,
+        cx: d.cx, cy: d.cy,
+        smoothCx: d.cx, smoothCy: d.cy,
+        score: d.score,
+        lastSeen: now,
+        misses: 0,
+        zone: null,
+        zoneFrames: 0,
+        lastConfirmedZone: null,
+        counts: 0,
       });
     }
     state.tracks = state.tracks.filter(t => now - t.lastSeen < TIMEOUT);
   }
 
   function checkLineCrossings(vw, vh) {
-    const line = getLineCoords(vw, vh);
-    for (const t of state.tracks) {
-      const cur = line.axis === 'y' ? t.cy : t.cx;
-      const prev = line.axis === 'y' ? t.prevCy : t.prevCx;
-      const curSide = cur < line.value ? 'neg' : 'pos';
+    const zones = getZonesFor(vw, vh);
+    const MIN = state.settings.minConfirmFrames || 2;
 
-      if (t.side === null) { t.side = curSide; continue; }
-      if (t.side !== curSide && !t.counted) {
-        const movingPositive = (prev < line.value && cur >= line.value);
-        const movingNegative = (prev > line.value && cur <= line.value);
-        if (movingPositive || movingNegative) {
-          const isEntry = (state.settings.entryDir === 'positive' && movingPositive)
-                       || (state.settings.entryDir === 'negative' && movingNegative);
+    for (const t of state.tracks) {
+      const z = classifyZone(t, zones);
+
+      if (z === t.zone) {
+        t.zoneFrames++;
+      } else {
+        t.zone = z;
+        t.zoneFrames = 1;
+      }
+
+      if ((z === 'A' || z === 'B') && t.zoneFrames >= MIN) {
+        if (!t.lastConfirmedZone) {
+          t.lastConfirmedZone = z;
+          continue;
+        }
+        if (t.lastConfirmedZone !== z) {
+          const aToB = (t.lastConfirmedZone === 'A' && z === 'B');
+          const isEntry = (state.settings.entryDir === 'positive' && aToB)
+                       || (state.settings.entryDir === 'negative' && !aToB);
+
           if (isEntry) state.countIn++; else state.countOut++;
           logEvent(isEntry ? 'in' : 'out');
           feedback(isEntry ? 'in' : 'out');
-          t.counted = true;
+          t.counts++;
+          t.lastConfirmedZone = z;
+
           updateCounters();
           updateCapacityUI();
           checkCapacity();
           sharePush();
         }
-        t.side = curSide;
       }
     }
   }
@@ -667,7 +774,7 @@
         const avg = state.fpsSamples.reduce((a, b) => a + b, 0) / state.fpsSamples.length;
         els.fps.textContent = `${(1000 / Math.max(avg, 1)).toFixed(1)} FPS`;
 
-        const persons = preds
+        const personsRaw = preds
           .filter(p => p.class === 'person' && p.score >= state.settings.confThreshold)
           .map(p => ({
             bbox: p.bbox,
@@ -675,6 +782,7 @@
             cy: p.bbox[1] + p.bbox[3] / 2,
             score: p.score,
           }));
+        const persons = nms(personsRaw, 0.5);
 
         els.people.textContent = `${persons.length} شخص`;
         updateTracks(persons, vw, vh);
@@ -985,6 +1093,16 @@
     els.confThreshold.addEventListener('input', e => {
       state.settings.confThreshold = +e.target.value / 100;
       els.confVal.textContent = e.target.value + '%';
+      saveState();
+    });
+    els.bufferZone.addEventListener('input', e => {
+      state.settings.bufferZone = +e.target.value;
+      els.bufferVal.textContent = state.settings.bufferZone + '%';
+      saveState();
+    });
+    els.minConfirmFrames.addEventListener('input', e => {
+      state.settings.minConfirmFrames = +e.target.value;
+      els.minFramesVal.textContent = String(state.settings.minConfirmFrames);
       saveState();
     });
     els.cameraFacing.addEventListener('change', async e => {
