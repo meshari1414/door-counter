@@ -180,7 +180,6 @@ body[data-mode="viewer"] .badge-mode { background: #7c3aed; border-color: #6d28d
   box-shadow: var(--shadow);
   user-select: none;
   -webkit-user-select: none;
-  touch-action: none;
 }
 #video, #overlay {
   position: absolute;
@@ -197,6 +196,7 @@ body[data-mode="viewer"] .badge-mode { background: #7c3aed; border-color: #6d28d
   justify-content: center;
   pointer-events: auto;
   cursor: grab;
+  touch-action: none;
 }
 .line-handle.dragging { cursor: grabbing; }
 .line-handle.horizontal {
