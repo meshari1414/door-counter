@@ -1009,7 +1009,7 @@ ${cmpLine}</div>
     share.role = 'viewer'; share.code = code;
     share.ref = share.db.ref('rooms/' + code);
     state.mode = 'viewer'; els.body.dataset.mode = 'viewer';
-    els.modeBadge.textContent = 'مشاهد — ' + code;
+    els.modeBadge.textContent = 'مشاهد';
     share.ref.on('value', snap => {
       const d = snap.val();
       if (!d) { showShareStatus('الجلسة غير موجودة', 'error'); return; }
